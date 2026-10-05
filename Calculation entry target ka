@@ -1,0 +1,438 @@
+"""
+=====================================================================
+BTCUSD SUPERTREND GRID BOT + STREAMLIT DASHBOARD
+=====================================================================
+Candle Resolution : 1h
+Supertrend Settings: ATR Period = 10, Multiplier = 2
+Grid: 14 levels, 300 points gap, 1 lot (0.001 BTC) per level
+=====================================================================
+"""
+
+import time
+import hmac
+import hashlib
+import json
+import requests
+import pandas as pd
+import pandas_ta as ta
+import plotly.graph_objects as go
+import streamlit as st
+
+
+# =====================================================================
+# PATH 1: CONFIG
+# =====================================================================
+BASE_URL = 'https://api.india.delta.exchange'
+API_KEY = 'your_api_key'
+API_SECRET = 'your_api_secret'
+
+SYMBOL = 'BTCUSD'
+PRODUCT_ID = 27
+
+CANDLE_RESOLUTION = '1h'
+ATR_PERIOD = 10
+ATR_MULTIPLIER = 2
+CANDLE_LOOKBACK_SECONDS = 60 * 60 * 24 * 15   # ~15 days of 1h candles
+
+LEVEL_GAP = 300
+NUM_LEVELS = 14
+ORDER_SIZE_LOTS = 1
+POLL_INTERVAL_SECONDS = 5
+
+
+# =====================================================================
+# PATH 2: AUTH HELPERS
+# =====================================================================
+def generate_signature(secret, message):
+    message = bytes(message, 'utf-8')
+    secret = bytes(secret, 'utf-8')
+    return hmac.new(secret, message, hashlib.sha256).hexdigest()
+
+
+def signed_request(method, path, query_string='', payload_dict=None):
+    timestamp = str(int(time.time()))
+    payload = json.dumps(payload_dict) if payload_dict is not None else ''
+    url = f'{BASE_URL}{path}'
+    signature_data = method + timestamp + path + query_string + payload
+    signature = generate_signature(API_SECRET, signature_data)
+    headers = {
+        'api-key': API_KEY,
+        'timestamp': timestamp,
+        'signature': signature,
+        'User-Agent': 'python-rest-client',
+        'Content-Type': 'application/json'
+    }
+    try:
+        if method == 'GET':
+            response = requests.get(url, headers=headers, timeout=(3, 27))
+        else:
+            response = requests.request(method, url, data=payload, headers=headers, timeout=(3, 27))
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"API error [{method} {path}]: {e}")
+        return None
+
+
+# =====================================================================
+# PATH 3: MARKET DATA (CANDLES + SUPERTREND)
+# =====================================================================
+def fetch_candles():
+    end = int(time.time())
+    start = end - CANDLE_LOOKBACK_SECONDS
+    path = '/v2/history/candles'
+    query_string = f'?resolution={CANDLE_RESOLUTION}&symbol={SYMBOL}&start={start}&end={end}'
+    url = f'{BASE_URL}{path}{query_string}'
+    try:
+        response = requests.get(url, timeout=(3, 27))
+        response.raise_for_status()
+        data = response.json()
+        candles = data.get('result', [])
+        if not candles:
+            return None
+        df = pd.DataFrame(candles)
+        df = df.sort_values('time').reset_index(drop=True)
+        df['time'] = pd.to_datetime(df['time'], unit='s')
+        return df
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching candles: {e}")
+        return None
+
+
+def compute_supertrend_series(df):
+    """Full Supertrend line + direction series for the whole df (used for chart line)."""
+    st_df = ta.supertrend(df['high'], df['low'], df['close'],
+                           length=ATR_PERIOD, multiplier=ATR_MULTIPLIER)
+    super_col = [c for c in st_df.columns if c.startswith('SUPERT_')][0]
+    trend_col = [c for c in st_df.columns if c.startswith('SUPERTd_')][0]
+    return st_df[super_col], st_df[trend_col]
+
+
+def get_current_direction_and_anchor(df):
+    """Direction + anchor value from the last CLOSED candle (avoids mid-candle repaint)."""
+    supert_values, supert_dir = compute_supertrend_series(df)
+    if len(supert_values) < 2:
+        return None, None
+    direction = 'buy' if supert_dir.iloc[-2] == 1 else 'sell'
+    anchor = float(supert_values.iloc[-2])
+    return direction, anchor
+
+
+# =====================================================================
+# PATH 4: GRID BUILD + ENTRY ORDER PLACEMENT (14 levels)
+# =====================================================================
+def build_grid(direction, anchor):
+    levels = []
+    for i in range(NUM_LEVELS):
+        if direction == 'sell':
+            entry_price = anchor - (i * LEVEL_GAP)
+            target_price = entry_price - LEVEL_GAP
+            entry_side, target_side = 'sell', 'buy'
+        else:
+            entry_price = anchor + (i * LEVEL_GAP)
+            target_price = entry_price + LEVEL_GAP
+            entry_side, target_side = 'buy', 'sell'
+
+        levels.append({
+            'level_num': i + 1,
+            'entry_price': round(entry_price, 1),
+            'target_price': round(target_price, 1),
+            'entry_side': entry_side,
+            'target_side': target_side,
+            'entry_order_id': None,
+            'entry_client_order_id': f"grid_{direction}_{int(anchor)}_{i+1}",
+            'entry_status': 'pending',
+            'target_order_id': None,
+            'target_status': 'not_placed',
+            '_cycle': 0,
+            'entry_fill_count': 0,
+            'target_fill_count': 0
+        })
+    return levels
+
+
+def place_grid_orders(levels):
+    """Places all 14 entry limit orders in a single batch call."""
+    orders_payload = []
+    for lvl in levels:
+        orders_payload.append({
+            "size": ORDER_SIZE_LOTS,
+            "side": lvl['entry_side'],
+            "order_type": "limit_order",
+            "limit_price": str(lvl['entry_price']),
+            "client_order_id": lvl['entry_client_order_id']
+        })
+
+    payload_dict = {"product_id": PRODUCT_ID, "orders": orders_payload}
+    result = signed_request('POST', '/v2/orders/batch', '', payload_dict)
+
+    if result and result.get('success'):
+        placed_orders = result.get('result', [])
+        for placed in placed_orders:
+            coid = placed.get('client_order_id')
+            for lvl in levels:
+                if lvl['entry_client_order_id'] == coid:
+                    lvl['entry_order_id'] = placed.get('id')
+        print(f"Placed {len(placed_orders)} grid entry orders.")
+    else:
+        print(f"Failed to place grid orders: {result}")
+    return levels
+
+
+# =====================================================================
+# PATH 5: CANCEL ALL / CLOSE POSITION (on direction flip)
+# =====================================================================
+def cancel_all_orders():
+    payload_dict = {
+        "product_id": PRODUCT_ID,
+        "cancel_limit_orders": "true",
+        "cancel_stop_orders": "true",
+        "cancel_reduce_only_orders": "true"
+    }
+    return signed_request('DELETE', '/v2/orders/all', '', payload_dict)
+
+
+def get_open_orders():
+    query_string = f'?product_id={PRODUCT_ID}&state=open'
+    result = signed_request('GET', '/v2/orders', query_string)
+    return result.get('result', []) if result else []
+
+
+def get_position():
+    query_string = f'?product_id={PRODUCT_ID}'
+    result = signed_request('GET', '/v2/positions', query_string)
+    return result.get('result', {}) if result else {}
+
+
+def close_position_market():
+    position = get_position()
+    size = position.get('size', 0) if position else 0
+    if size == 0:
+        return
+    side = 'sell' if size > 0 else 'buy'
+    payload_dict = {
+        "product_id": PRODUCT_ID,
+        "size": abs(size),
+        "side": side,
+        "order_type": "market_order",
+        "reduce_only": "true"
+    }
+    signed_request('POST', '/v2/orders', '', payload_dict)
+
+
+# =====================================================================
+# PATH 6: TARGET ORDER (placed only after entry fill is confirmed)
+# =====================================================================
+def place_target_order(level):
+    client_order_id = f"{level['entry_client_order_id'].split('_c')[0]}_t{level['_cycle']}"
+    payload_dict = {
+        "product_id": PRODUCT_ID,
+        "size": ORDER_SIZE_LOTS,
+        "side": level['target_side'],
+        "order_type": "limit_order",
+        "limit_price": str(level['target_price']),
+        "reduce_only": "true",
+        "client_order_id": client_order_id
+    }
+    result = signed_request('POST', '/v2/orders', '', payload_dict)
+    if result and result.get('success'):
+        level['target_order_id'] = result['result'].get('id')
+        level['target_status'] = 'placed'
+        print(f"Level {level['level_num']} target placed at {level['target_price']}")
+    else:
+        print(f"Failed to place target order for level {level['level_num']}: {result}")
+
+
+# =====================================================================
+# PATH 7: RE-ENTRY (same entry price, unlimited cycles until flip)
+# =====================================================================
+def re_enter_level(level):
+    level['_cycle'] += 1
+    new_client_order_id = f"{level['entry_client_order_id'].split('_c')[0]}_c{level['_cycle']}"
+
+    payload_dict = {
+        "product_id": PRODUCT_ID,
+        "size": ORDER_SIZE_LOTS,
+        "side": level['entry_side'],
+        "order_type": "limit_order",
+        "limit_price": str(level['entry_price']),
+        "client_order_id": new_client_order_id
+    }
+    result = signed_request('POST', '/v2/orders', '', payload_dict)
+    if result and result.get('success'):
+        level['entry_order_id'] = result['result'].get('id')
+        level['entry_client_order_id'] = new_client_order_id
+        level['entry_status'] = 'pending'
+        level['target_order_id'] = None
+        level['target_status'] = 'not_placed'
+        print(f"Level {level['level_num']} RE-ENTERED at {level['entry_price']} (cycle {level['_cycle']})")
+    else:
+        print(f"Failed to re-enter level {level['level_num']}: {result}")
+
+
+# =====================================================================
+# PATH 8: FILL MONITORING (entry fill -> target, target fill -> re-entry)
+# =====================================================================
+def monitor_fills(levels):
+    open_orders = get_open_orders()
+    open_order_ids = {o['id'] for o in open_orders}
+
+    for lvl in levels:
+        if lvl['entry_status'] == 'pending' and lvl['entry_order_id'] is not None:
+            if lvl['entry_order_id'] not in open_order_ids:
+                lvl['entry_status'] = 'filled'
+                lvl['entry_fill_count'] += 1
+                print(f"Level {lvl['level_num']} entry FILLED (count={lvl['entry_fill_count']})")
+                place_target_order(lvl)
+
+        elif lvl['target_status'] == 'placed' and lvl['target_order_id'] is not None:
+            if lvl['target_order_id'] not in open_order_ids:
+                lvl['target_status'] = 'filled'
+                lvl['target_fill_count'] += 1
+                print(f"Level {lvl['level_num']} target FILLED (count={lvl['target_fill_count']})")
+                re_enter_level(lvl)
+
+    return levels
+
+
+# =====================================================================
+# PATH 9: CHART (candles + Supertrend line + 14 shifting entry/target lines)
+# =====================================================================
+def render_grid_chart(df, levels, direction):
+    fig = go.Figure()
+
+    fig.add_trace(go.Candlestick(
+        x=df['time'], open=df['open'], high=df['high'],
+        low=df['low'], close=df['close'], name='Price'
+    ))
+
+    supert_values, _ = compute_supertrend_series(df)
+    fig.add_trace(go.Scatter(
+        x=df['time'], y=supert_values, mode='lines',
+        name=f'Supertrend({ATR_PERIOD},{ATR_MULTIPLIER})',
+        line=dict(color='blue', width=2)
+    ))
+
+    x_start = df['time'].iloc[0]
+    x_end = df['time'].iloc[-1]
+
+    for lvl in levels:
+        # Line is drawn ONLY if the order is actually confirmed on the exchange
+        if lvl['entry_order_id'] is None:
+            continue
+
+        if lvl['entry_status'] == 'pending':
+            fig.add_shape(
+                type='line', x0=x_start, x1=x_end,
+                y0=lvl['entry_price'], y1=lvl['entry_price'],
+                line=dict(color='green', width=1.5, dash='dot')
+            )
+            fig.add_annotation(
+                x=x_end, y=lvl['entry_price'],
+                text=f"L{lvl['level_num']} Entry {lvl['entry_price']}",
+                showarrow=False, font=dict(color='green', size=10), xanchor='left'
+            )
+
+        elif lvl['target_status'] == 'placed' and lvl['target_order_id'] is not None:
+            fig.add_shape(
+                type='line', x0=x_start, x1=x_end,
+                y0=lvl['target_price'], y1=lvl['target_price'],
+                line=dict(color='red', width=1.5, dash='dot')
+            )
+            fig.add_annotation(
+                x=x_end, y=lvl['target_price'],
+                text=f"L{lvl['level_num']} Target {lvl['target_price']}",
+                showarrow=False, font=dict(color='red', size=10), xanchor='left'
+            )
+
+    fig.update_layout(
+        title=f"BTCUSD 1h - Supertrend({ATR_PERIOD},{ATR_MULTIPLIER}) - Direction: {direction.upper()}",
+        xaxis_title='Time', yaxis_title='Price',
+        xaxis_rangeslider_visible=False, height=700,
+        legend=dict(orientation='h', yanchor='bottom', y=1.02)
+    )
+    return fig
+
+
+# =====================================================================
+# PATH 10: STATS TABLE (entry/target fill counts per level)
+# =====================================================================
+def render_stats_table(levels):
+    rows = []
+    for lvl in levels:
+        rows.append({
+            'Level': lvl['level_num'],
+            'Entry Price': lvl['entry_price'],
+            'Target Price': lvl['target_price'],
+            'Current Status': (
+                'Entry Pending' if lvl['entry_status'] == 'pending'
+                else 'Target Active' if lvl['target_status'] == 'placed'
+                else 'Unknown'
+            ),
+            'Entry Fill Count': lvl['entry_fill_count'],
+            'Target Fill Count': lvl['target_fill_count'],
+        })
+
+    df_stats = pd.DataFrame(rows)
+    total_entries = df_stats['Entry Fill Count'].sum()
+    total_targets = df_stats['Target Fill Count'].sum()
+
+    st.subheader("Level-wise Entry/Target Tracking")
+    st.dataframe(df_stats, use_container_width=True)
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Entries Filled", total_entries)
+    col2.metric("Total Targets Hit", total_targets)
+    col3.metric("Open/Pending Cycles", total_entries - total_targets)
+
+
+# =====================================================================
+# PATH 11: MAIN LOOP (direction flip detection + grid lifecycle + dashboard)
+# =====================================================================
+def main():
+    st.set_page_config(layout="wide")
+    st.title("BTCUSD Supertrend Grid Bot Dashboard")
+
+    chart_placeholder = st.empty()
+    stats_placeholder = st.empty()
+
+    grid_state = {'direction': None, 'anchor': None, 'levels': []}
+    last_direction = None
+
+    while True:
+        df = fetch_candles()
+        if df is None or len(df) < ATR_PERIOD + 2:
+            print("Not enough candle data yet, retrying...")
+            time.sleep(POLL_INTERVAL_SECONDS)
+            continue
+
+        direction, anchor = get_current_direction_and_anchor(df)
+        if direction is None:
+            time.sleep(POLL_INTERVAL_SECONDS)
+            continue
+
+        flipped = (last_direction is not None and direction != last_direction)
+        first_run = (last_direction is None)
+
+        if flipped or first_run:
+            print(f"{'FLIP' if flipped else 'INIT'} -> {direction.upper()} | Anchor={anchor}")
+            cancel_all_orders()
+            close_position_market()
+            new_levels = build_grid(direction, anchor)
+            new_levels = place_grid_orders(new_levels)
+            grid_state = {'direction': direction, 'anchor': anchor, 'levels': new_levels}
+            last_direction = direction
+        else:
+            grid_state['levels'] = monitor_fills(grid_state['levels'])
+
+        fig = render_grid_chart(df, grid_state['levels'], grid_state['direction'])
+        chart_placeholder.plotly_chart(fig, use_container_width=True)
+
+        with stats_placeholder.container():
+            render_stats_table(grid_state['levels'])
+
+        time.sleep(POLL_INTERVAL_SECONDS)
+
+
+if __name__ == "__main__":
+    main()
