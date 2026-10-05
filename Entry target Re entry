@@ -1,0 +1,183 @@
+import time
+import hmac
+import hashlib
+import json
+import requests
+
+# ========== CONFIG (confirmed values) ==========
+BASE_URL = 'https://api.india.delta.exchange'
+API_KEY = 'your_api_key'
+API_SECRET = 'your_api_secret'
+
+PRODUCT_ID = 27                 # BTCUSD
+LEVEL_GAP = 300                 # points between each grid level
+NUM_LEVELS = 14
+ORDER_SIZE_LOTS = 1             # 1 lot = 0.001 BTC
+
+
+# ========== AUTH HELPER (skip if you already have this) ==========
+def generate_signature(secret, message):
+    message = bytes(message, 'utf-8')
+    secret = bytes(secret, 'utf-8')
+    return hmac.new(secret, message, hashlib.sha256).hexdigest()
+
+
+def signed_request(method, path, query_string='', payload_dict=None):
+    timestamp = str(int(time.time()))
+    payload = json.dumps(payload_dict) if payload_dict is not None else ''
+    url = f'{BASE_URL}{path}'
+    signature_data = method + timestamp + path + query_string + payload
+    signature = generate_signature(API_SECRET, signature_data)
+    headers = {
+        'api-key': API_KEY,
+        'timestamp': timestamp,
+        'signature': signature,
+        'User-Agent': 'python-rest-client',
+        'Content-Type': 'application/json'
+    }
+    try:
+        if method == 'GET':
+            response = requests.get(url, headers=headers, timeout=(3, 27))
+        else:
+            response = requests.request(method, url, data=payload, headers=headers, timeout=(3, 27))
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"API error [{method} {path}]: {e}")
+        return None
+
+
+def get_open_orders():
+    query_string = f'?product_id={PRODUCT_ID}&state=open'
+    result = signed_request('GET', '/v2/orders', query_string)
+    return result.get('result', []) if result else []
+
+
+# ========== 1. GRID BUILD + ENTRY ORDERS ==========
+def build_grid(direction, anchor):
+    """direction: 'buy' or 'sell' ; anchor: Supertrend line value at signal time"""
+    levels = []
+    for i in range(NUM_LEVELS):
+        if direction == 'sell':
+            entry_price = anchor - (i * LEVEL_GAP)
+            target_price = entry_price - LEVEL_GAP
+            entry_side, target_side = 'sell', 'buy'
+        else:
+            entry_price = anchor + (i * LEVEL_GAP)
+            target_price = entry_price + LEVEL_GAP
+            entry_side, target_side = 'buy', 'sell'
+
+        levels.append({
+            'level_num': i + 1,
+            'entry_price': round(entry_price, 1),
+            'target_price': round(target_price, 1),
+            'entry_side': entry_side,
+            'target_side': target_side,
+            'entry_order_id': None,
+            'entry_client_order_id': f"grid_{direction}_{int(anchor)}_{i+1}",
+            'entry_status': 'pending',
+            'target_order_id': None,
+            'target_status': 'not_placed',
+            '_cycle': 0
+        })
+    return levels
+
+
+def place_grid_orders(levels):
+    """Places all 14 entry limit orders in a single batch call."""
+    orders_payload = []
+    for lvl in levels:
+        orders_payload.append({
+            "size": ORDER_SIZE_LOTS,
+            "side": lvl['entry_side'],
+            "order_type": "limit_order",
+            "limit_price": str(lvl['entry_price']),
+            "client_order_id": lvl['entry_client_order_id']
+        })
+
+    payload_dict = {"product_id": PRODUCT_ID, "orders": orders_payload}
+    result = signed_request('POST', '/v2/orders/batch', '', payload_dict)
+
+    if result and result.get('success'):
+        placed_orders = result.get('result', [])
+        for placed in placed_orders:
+            coid = placed.get('client_order_id')
+            for lvl in levels:
+                if lvl['entry_client_order_id'] == coid:
+                    lvl['entry_order_id'] = placed.get('id')
+        print(f"Placed {len(placed_orders)} grid entry orders.")
+    else:
+        print(f"Failed to place grid orders: {result}")
+    return levels
+
+
+# ========== 2. TARGET ORDER (on entry fill) ==========
+def place_target_order(level):
+    client_order_id = f"{level['entry_client_order_id'].split('_c')[0]}_t{level['_cycle']}"
+    payload_dict = {
+        "product_id": PRODUCT_ID,
+        "size": ORDER_SIZE_LOTS,
+        "side": level['target_side'],
+        "order_type": "limit_order",
+        "limit_price": str(level['target_price']),
+        "reduce_only": "true",
+        "client_order_id": client_order_id
+    }
+    result = signed_request('POST', '/v2/orders', '', payload_dict)
+    if result and result.get('success'):
+        level['target_order_id'] = result['result'].get('id')
+        level['target_status'] = 'placed'
+        print(f"Level {level['level_num']} target placed at {level['target_price']}")
+    else:
+        print(f"Failed to place target order for level {level['level_num']}: {result}")
+
+
+# ========== 3. RE-ENTRY (on target fill, unlimited cycles) ==========
+def re_enter_level(level):
+    """Re-places a fresh entry limit order at the same fixed entry_price for this
+    level, with no limit on number of cycles, until trend flip (handled by your
+    existing cancel-on-direction-change logic)."""
+    level['_cycle'] += 1
+    new_client_order_id = f"{level['entry_client_order_id'].split('_c')[0]}_c{level['_cycle']}"
+
+    payload_dict = {
+        "product_id": PRODUCT_ID,
+        "size": ORDER_SIZE_LOTS,
+        "side": level['entry_side'],
+        "order_type": "limit_order",
+        "limit_price": str(level['entry_price']),
+        "client_order_id": new_client_order_id
+    }
+    result = signed_request('POST', '/v2/orders', '', payload_dict)
+    if result and result.get('success'):
+        level['entry_order_id'] = result['result'].get('id')
+        level['entry_client_order_id'] = new_client_order_id
+        level['entry_status'] = 'pending'
+        level['target_order_id'] = None
+        level['target_status'] = 'not_placed'
+        print(f"Level {level['level_num']} RE-ENTERED at {level['entry_price']} (cycle {level['_cycle']})")
+    else:
+        print(f"Failed to re-enter level {level['level_num']}: {result}")
+
+
+# ========== FILL MONITORING (connects all 3 pieces together) ==========
+def monitor_fills(levels):
+    """Call this every POLL_INTERVAL_SECONDS while the current direction is active.
+    Detects entry fills -> places target. Detects target fills -> re-enters level."""
+    open_orders = get_open_orders()
+    open_order_ids = {o['id'] for o in open_orders}
+
+    for lvl in levels:
+        if lvl['entry_status'] == 'pending' and lvl['entry_order_id'] is not None:
+            if lvl['entry_order_id'] not in open_order_ids:
+                lvl['entry_status'] = 'filled'
+                print(f"Level {lvl['level_num']} entry FILLED (~{lvl['entry_price']})")
+                place_target_order(lvl)
+
+        elif lvl['target_status'] == 'placed' and lvl['target_order_id'] is not None:
+            if lvl['target_order_id'] not in open_order_ids:
+                lvl['target_status'] = 'filled'
+                print(f"Level {lvl['level_num']} target FILLED (~{lvl['target_price']})")
+                re_enter_level(lvl)
+
+    return levels
