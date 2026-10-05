@@ -1,0 +1,210 @@
+import hashlib
+import hmac
+import json
+import time
+import requests
+
+base_url = 'https://api.india.delta.exchange'
+api_key = 'your_api_key'
+api_secret = 'your_api_secret'
+
+PRODUCT_ID = 27  # BTCUSD
+RETRY_INTERVAL_SECONDS = 5
+MAX_RETRIES = 5
+
+
+def generate_signature(secret, message):
+    message = bytes(message, 'utf-8')
+    secret = bytes(secret, 'utf-8')
+    hash = hmac.new(secret, message, hashlib.sha256)
+    return hash.hexdigest()
+
+
+def cancel_all_orders(product_id):
+    """Cancels ALL open orders (limit, stop, reduce-only) for the given product_id,
+    regardless of client_order_id or how the order was placed (bot/manual/mobile)."""
+    method = 'DELETE'
+    timestamp = str(int(time.time()))
+    path = '/v2/orders/all'
+    url = f'{base_url}{path}'
+    query_string = ''
+
+    payload_dict = {
+        "product_id": product_id,
+        "cancel_limit_orders": "true",
+        "cancel_stop_orders": "true",
+        "cancel_reduce_only_orders": "true"
+    }
+    payload = json.dumps(payload_dict)
+
+    signature_data = method + timestamp + path + query_string + payload
+    signature = generate_signature(api_secret, signature_data)
+
+    headers = {
+        'api-key': api_key,
+        'timestamp': timestamp,
+        'signature': signature,
+        'User-Agent': 'python-rest-client',
+        'Content-Type': 'application/json'
+    }
+
+    try:
+        response = requests.request(
+            method, url, data=payload, params={}, timeout=(3, 27), headers=headers
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error while cancelling orders: {e}")
+        return None
+
+
+def get_open_orders(product_id):
+    """Returns list of currently open/pending orders for the product_id."""
+    method = 'GET'
+    timestamp = str(int(time.time()))
+    path = '/v2/orders'
+    url = f'{base_url}{path}'
+    query = {"product_id": product_id, "state": "open"}
+    query_string = f'?product_id={product_id}&state=open'
+    payload = ''
+
+    signature_data = method + timestamp + path + query_string + payload
+    signature = generate_signature(api_secret, signature_data)
+
+    headers = {
+        'api-key': api_key,
+        'timestamp': timestamp,
+        'signature': signature,
+        'User-Agent': 'python-rest-client',
+        'Content-Type': 'application/json'
+    }
+
+    try:
+        response = requests.request(
+            method, url, data=payload, params=query, timeout=(3, 27), headers=headers
+        )
+        response.raise_for_status()
+        result = response.json()
+        return result.get('result', [])
+    except requests.exceptions.RequestException as e:
+        print(f"Error while fetching open orders: {e}")
+        return []
+
+
+def get_position(product_id):
+    """Returns the current position object for the product_id. size=0 means flat."""
+    method = 'GET'
+    timestamp = str(int(time.time()))
+    path = '/v2/positions'
+    url = f'{base_url}{path}'
+    query = {"product_id": product_id}
+    query_string = f'?product_id={product_id}'
+    payload = ''
+
+    signature_data = method + timestamp + path + query_string + payload
+    signature = generate_signature(api_secret, signature_data)
+
+    headers = {
+        'api-key': api_key,
+        'timestamp': timestamp,
+        'signature': signature,
+        'User-Agent': 'python-rest-client',
+        'Content-Type': 'application/json'
+    }
+
+    try:
+        response = requests.request(
+            method, url, data=payload, params=query, timeout=(3, 27), headers=headers
+        )
+        response.raise_for_status()
+        result = response.json()
+        return result.get('result', {})
+    except requests.exceptions.RequestException as e:
+        print(f"Error while fetching position: {e}")
+        return {}
+
+
+def close_position_market_order(product_id, position_size):
+    """Closes an open position using a reduce_only market order.
+    position_size: positive for long, negative for short (from get_position)."""
+    if position_size == 0:
+        return None
+
+    side = "sell" if position_size > 0 else "buy"
+    size = abs(position_size)
+
+    method = 'POST'
+    timestamp = str(int(time.time()))
+    path = '/v2/orders'
+    url = f'{base_url}{path}'
+    query_string = ''
+
+    payload_dict = {
+        "product_id": product_id,
+        "size": size,
+        "side": side,
+        "order_type": "market_order",
+        "reduce_only": "true"
+    }
+    payload = json.dumps(payload_dict)
+
+    signature_data = method + timestamp + path + query_string + payload
+    signature = generate_signature(api_secret, signature_data)
+
+    headers = {
+        'api-key': api_key,
+        'timestamp': timestamp,
+        'signature': signature,
+        'User-Agent': 'python-rest-client',
+        'Content-Type': 'application/json'
+    }
+
+    try:
+        response = requests.request(
+            method, url, data=payload, params={}, timeout=(3, 27), headers=headers
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error while closing position: {e}")
+        return None
+
+
+def flatten_and_verify(product_id=PRODUCT_ID, max_retries=MAX_RETRIES, interval=RETRY_INTERVAL_SECONDS):
+    """
+    Combined flow:
+    1. Cancel all open orders (any source - bot/manual/mobile, with or without client_order_id)
+    2. Close any open position via reduce_only market order
+    3. Wait `interval` seconds, then verify both orders and position are clear
+    4. Repeat up to `max_retries` times if anything is still open
+    Returns True if fully flat, False if max_retries exhausted with something still open.
+    """
+    for attempt in range(1, max_retries + 1):
+        print(f"Attempt {attempt}/{max_retries}: cancelling orders and closing position for product_id {product_id}")
+
+        cancel_all_orders(product_id)
+
+        position = get_position(product_id)
+        position_size = position.get('size', 0) if position else 0
+        if position_size != 0:
+            close_position_market_order(product_id, position_size)
+
+        time.sleep(interval)
+
+        open_orders = get_open_orders(product_id)
+        position_after = get_position(product_id)
+        position_size_after = position_after.get('size', 0) if position_after else 0
+
+        if not open_orders and position_size_after == 0:
+            print("Verified: no open orders and no open position remain.")
+            return True
+
+        print(f"Still found open_orders={len(open_orders)}, position_size={position_size_after}. Retrying...")
+
+    print("Max retries reached. Manual intervention needed - orders/position may still be open.")
+    return False
+
+
+if __name__ == "__main__":
+    flatten_and_verify()
