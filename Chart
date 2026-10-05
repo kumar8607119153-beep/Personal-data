@@ -1,0 +1,57 @@
+def render_grid_chart(df, levels, direction):
+    fig = go.Figure()
+
+    fig.add_trace(go.Candlestick(
+        x=df['time'], open=df['open'], high=df['high'],
+        low=df['low'], close=df['close'], name='Price'
+    ))
+
+    supert_values, _ = compute_supertrend_series(df)
+    fig.add_trace(go.Scatter(
+        x=df['time'], y=supert_values, mode='lines',
+        name=f'Supertrend({ATR_PERIOD},{ATR_MULTIPLIER})',
+        line=dict(color='blue', width=2)
+    ))
+
+    x_start = df['time'].iloc[0]
+    x_end = df['time'].iloc[-1]
+
+    for lvl in levels:
+        # KEY FIX: skip this level entirely if the order was never
+        # confirmed placed on the exchange (no order_id yet)
+        if lvl['entry_order_id'] is None:
+            continue   # <-- no line drawn, order not live on exchange yet
+
+        if lvl['entry_status'] == 'pending':
+            # Order IS placed on exchange and resting, waiting to fill -> GREEN
+            fig.add_shape(
+                type='line', x0=x_start, x1=x_end,
+                y0=lvl['entry_price'], y1=lvl['entry_price'],
+                line=dict(color='green', width=1.5, dash='dot')
+            )
+            fig.add_annotation(
+                x=x_end, y=lvl['entry_price'],
+                text=f"L{lvl['level_num']} Entry {lvl['entry_price']}",
+                showarrow=False, font=dict(color='green', size=10), xanchor='left'
+            )
+
+        elif lvl['target_status'] == 'placed' and lvl['target_order_id'] is not None:
+            # Target order IS confirmed placed on exchange -> RED
+            fig.add_shape(
+                type='line', x0=x_start, x1=x_end,
+                y0=lvl['target_price'], y1=lvl['target_price'],
+                line=dict(color='red', width=1.5, dash='dot')
+            )
+            fig.add_annotation(
+                x=x_end, y=lvl['target_price'],
+                text=f"L{lvl['level_num']} Target {lvl['target_price']}",
+                showarrow=False, font=dict(color='red', size=10), xanchor='left'
+            )
+
+    fig.update_layout(
+        title=f"BTCUSD 1h - Supertrend({ATR_PERIOD},{ATR_MULTIPLIER}) - Direction: {direction.upper()}",
+        xaxis_title='Time', yaxis_title='Price',
+        xaxis_rangeslider_visible=False, height=700,
+        legend=dict(orientation='h', yanchor='bottom', y=1.02)
+    )
+    return fig
