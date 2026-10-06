@@ -1,0 +1,966 @@
+# ============================================================
+# SANJAY RANA RATHORE
+# MASTER FILM + DELTA EXCHANGE INTEGRATION
+# ONE FILE — 10 PARTS / 40 SCENES
+# ============================================================
+
+import os
+import re
+import json
+import time
+import hmac
+import hashlib
+from pathlib import Path
+from datetime import datetime, timezone
+
+# ============================================================
+# BASIC IDENTITY
+# ============================================================
+
+FILM_TITLE = "SANJAY RANA RATHORE"
+MOBILE_NUMBER = "8930814389"
+
+LANGUAGE = "Natural Hindi + light, authentic Haryanvi"
+FORMAT = "16:9 cinematic live-action"
+
+# ============================================================
+# DELTA EXCHANGE INDIA
+# ============================================================
+
+DELTA_BASE_URL = os.getenv(
+    "DELTA_BASE_URL",
+    "https://api.india.delta.exchange"
+)
+
+DELTA_API_KEY = os.getenv("DELTA_API_KEY", "")
+DELTA_API_SECRET = os.getenv("DELTA_API_SECRET", "")
+
+# सुरक्षा:
+# API key/secret फिल्म में hard-code नहीं किए गए हैं।
+# अगर credentials उपलब्ध नहीं हैं तो film generation बंद नहीं होगी।
+
+DELTA_PRODUCT_SYMBOL = os.getenv(
+    "DELTA_PRODUCT_SYMBOL",
+    "BTCUSD"
+)
+
+# ============================================================
+# REAL DASHBOARD
+# ============================================================
+#
+# अलग Dashboard URL देने की जरूरत नहीं।
+#
+# यह master file आपके existing dashboard project के साथ
+# उसी project directory में रखी जा सकती है।
+#
+# अगर dashboard को live browser में दिखाना हो तो:
+#
+#   python master_film.py --dashboard
+#
+# Browser capture optional है।
+#
+
+DASHBOARD_DIR = Path("dashboard_assets")
+DASHBOARD_DIR.mkdir(exist_ok=True)
+
+REAL_DASHBOARD_FILE = Path(
+    os.getenv(
+        "SANJAY_RANA_DASHBOARD_FILE",
+        "DELTA-EXCHANGE-SANJAY-RANA-BTC-SUPER-TREND-PUBLIC-FINAL.py"
+    )
+)
+
+REAL_DASHBOARD_SCREENSHOT = (
+    DASHBOARD_DIR / "REAL_SANJAY_RANA_DASHBOARD.png"
+)
+
+# ============================================================
+# SYSTEM RULES
+# ============================================================
+
+SYSTEM_RULES = {
+    "supertrend": {
+        "atr_period": 10,
+        "multiplier": 3.0,
+        "source": "HL2",
+        "confirmed_candle_close": True,
+    },
+
+    "accounts": {
+        "account_a": {
+            "independent_quantity": True,
+            "independent_settings": True,
+            "independent_orders": True,
+            "independent_history": True,
+            "direction": "PRIMARY",
+        },
+
+        "account_b": {
+            "independent_quantity": True,
+            "independent_settings": True,
+            "independent_orders": True,
+            "independent_history": True,
+            "direction": "INVERSE",
+        },
+    },
+
+    "duplicate_safety": {
+        "one_setup_per_signal": True,
+        "exchange_state_check": True,
+        "refresh_safe": True,
+        "reconnect_safe": True,
+        "ip_change_safe": True,
+    },
+
+    "reversal": {
+        "close_old_position": True,
+        "cancel_old_pending": True,
+        "cancel_old_exit": True,
+        "verify_exchange_state": True,
+        "start_new_setup": True,
+    },
+
+    "level_identity": {
+        "original_level_preserved": True,
+        "target_not_recalculated_after_fill": True,
+    },
+}
+
+# ============================================================
+# MOBILE NUMBER IN FILM
+# ============================================================
+
+PHONE_SCENES = {
+    3,
+    25,
+    33,
+}
+
+# ============================================================
+# REAL DASHBOARD SCENES
+# ============================================================
+
+DASHBOARD_SCENES = {
+    5,
+    6,
+    7,
+    8,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    36,
+    37,
+}
+
+# ============================================================
+# COMPLETE ORIGINAL FILM
+# ============================================================
+
+MASTER_FILM = r'''
+SANJAY RANA RATHORE
+MASTER FILM — TARIK ONE-FILE PRODUCTION MASTER
+
+TARGET: 30–60 MINUTES
+LANGUAGE: Natural Hindi + light, authentic Haryanvi
+FORMAT: 16:9 cinematic live-action
+STYLE: Realistic Indian/Haryanvi drama; grounded, emotional, suspenseful, believable.
+
+CORE INSTRUCTION
+This is ONE continuous film. The ten PARTS below are chapters of the same story. Never treat them as unrelated videos. Preserve character identity, face, voice, age, body type, clothing continuity, locations, chronology, props and emotional continuity. If the video tool requires short clips, split scenes into connected shots and assemble them in the exact order below.
+
+REALISM RULES
+- Photorealistic live-action appearance; natural skin, hair, hands, shadows and movement.
+- Realistic Haryana village, Indian roads, homes, offices and trading-control-room environments.
+- No fantasy, holograms, cartoon look, plastic faces or impossible technology.
+- No random text or distorted screens.
+- Trading screens may use fictional/demo data; never imply invented results are real financial records.
+- Sanjay Rana Rathore is a fictional character; do not copy a real person's face or voice.
+- Natural actor performances, pauses, eye contact, reactions and body language.
+
+CHARACTER BIBLE
+SANJAY RANA RATHORE: Fictional Haryanvi/Indian man, intelligent, observant, disciplined, quiet and analytical. Rural roots, self-taught in markets and technology. Early clothing is simple rural/casual; later clean practical shirts/trousers; later understated professional clothing. Same face, voice, hairstyle and physical identity throughout.
+MEENA: Close family member; practical, caring and direct. Natural Hindi/Haryanvi.
+RAGHAV: Trusted technical associate; practical, curious and sometimes nervous under pressure.
+VIKRAM: Market-side contact; confident but realistic.
+ARVIND: Professional investigating officer; calm, observant and lawful.
+OFFICE EXECUTIVE: Polished institutional representative, skeptical and controlled.
+UNKNOWN CALLER: Natural adult voice; mysterious but realistic, not supernatural.
+
+VOICE RULE
+Every character has a distinct natural human voice. No robotic delivery. Hindi/Haryanvi pronunciation must sound like real actors from Haryana/North India. Dialogue must match the character speaking.
+
+============================================================
+PART 1 — गाँव और रहस्य
+============================================================
+
+SCENE 1 — गाँव की सुबह
+A real Haryana village at dawn: brick homes, narrow lane, buffaloes, hand pump, bicycles, distant household sounds. Sanjay walks through the lane carrying a small bag. Camera begins wide, then follows naturally.
+MEENA: “इतनी सुबह फिर निकल पड़े?”
+SANJAY: “बस थोड़ा काम है।”
+MEENA: “काम है या फिर वही स्क्रीन?”
+Sanjay gives a small smile.
+SANJAY: “दोनों में फर्क समझना पड़ेगा।”
+
+SCENE 2 — छोटा कमरा
+Sanjay studies charts on an ordinary laptop at an old desk. Fan noise, tea glass, notebook and handwritten notes. He is studying, not celebrating.
+SANJAY (quietly): “बाजार किसी को पहचानता नहीं... बस गलती और अनुशासन दोनों का हिसाब रखता है।”
+
+SCENE 3 — पहला रहस्यमय फोन
+Late night. Phone rings from an unknown number.
+UNKNOWN CALLER: “अगर तुम्हें सच में पता करना है कि तुम्हारा सिस्टम कहाँ तक जा सकता है... तो अकेले मत चलना।”
+SANJAY: “आप कौन?”
+Call ends. Hold on his face with only natural room ambience.
+
+SCENE 4 — फैसला
+Sanjay looks at notebook. A simple diagram reads: Signal → Direction → Order → Risk → Exit. He closes it. Fade to black.
+
+============================================================
+PART 2 — CONTROL ROOM
+============================================================
+
+SCENE 5 — कमरा तैयार होता है
+A modest professional control room: two monitors, laptop, router, power backup, organized cables. Raghav enters.
+RAGHAV: “तूने सच में ये सब बना लिया?”
+SANJAY: “बनाया नहीं। जो समझ आया, उसे व्यवस्थित किया है।”
+
+SCENE 6 — TWO ACCOUNT ARCHITECTURE
+Two completely separate account panels. Each account has its own quantity, settings, orders and history. ONLY direction is linked inversely: if Account A gets BUY, Account B gets SELL; if A gets SELL, B gets BUY. Never share other settings.
+RAGHAV: “मतलब दोनों खाते अलग हैं?”
+SANJAY: “पूरी तरह। सिर्फ दिशा का रिश्ता है। बाकी हर चीज अपनी।”
+
+SCENE 7 — DUPLICATE SAFETY
+SANJAY: “एक signal पर एक ही setup. Refresh करने से नया order नहीं बनना चाहिए। Pending order पहले से है तो system उसे दोबारा नहीं लगाएगा।”
+RAGHAV: “और पुराना trend?”
+SANJAY: “नया signal आया तो पुराना setup खत्म।”
+
+SCENE 8 — FIRST LIVE TEST
+A realistic fictional exchange interface shows a confirmed signal and order state. System records timestamp, direction and order status. Sanjay watches calmly.
+
+============================================================
+PART 3 — SUPERTREND
+============================================================
+
+SCENE 9 — SIGNAL RULE
+Sanjay explains: SuperTrend, ATR Period 10, Multiplier 3.0, Source HL2, confirmed candle close. No decision on an unfinished candle.
+RAGHAV: “चलती candle पर नहीं?”
+SANJAY: “नहीं। candle बंद होगी, तभी फैसला होगा।”
+
+SCENE 10 — FIRST FLIP
+A candle closes and SuperTrend direction changes. System marks a clean BUY signal. Keep the chart visually clean: essential green/red SuperTrend line and price only.
+SYSTEM LOG: “CONFIRMED SIGNAL — BUY”
+
+SCENE 11 — LIMIT BASKET
+On a signal, all configured limit levels on that side are placed. If an individual order fills later at another price, its target remains tied to its ORIGINAL LEVEL NUMBER; never recalculate the target from the later fill price.
+SANJAY: “जिस level पर order बना था, उसका target वही रहेगा। Fill price बदलने से level की पहचान नहीं बदलेगी।”
+
+SCENE 12 — PERMANENT LOG
+Record signal time, level, order ID, submit time, pending duration, filled/cancelled state and exit state. Never silently delete history.
+
+============================================================
+PART 4 — दो ACCOUNTS / ORDERS
+============================================================
+
+SCENE 13 — OPPOSITE DIRECTIONS
+Confirmed BUY: Account A BUY, Account B SELL. Quantities and settings remain independently controlled.
+
+SCENE 14 — SEPARATE LIMIT ORDERS
+Where the basket requires it, multiple limit orders appear as separate exchange-visible pending orders. Duplicate check happens before submission.
+RAGHAV: “अगर app दोबारा खुली?”
+SANJAY: “स्थिति exchange से पढ़ेंगे। अपनी याददाश्त से नहीं।”
+
+SCENE 15 — PARTIAL FILL
+One order fills, another stays pending. Filled order is not recreated. Its original level identity and target remain unchanged. Statuses are visibly separate: PENDING / FILLED / CANCELLED / CLOSED.
+
+SCENE 16 — NETWORK PRESSURE
+A brief network interruption occurs. Connection status becomes uncertain instead of falsely showing green. No new order is submitted until authoritative exchange state is confirmed.
+SANJAY: “जब पुष्टि नहीं है, तब दोबारा order नहीं। Safety पहले।”
+
+============================================================
+PART 5 — REVERSAL
+============================================================
+
+SCENE 17 — MARKET TURNS
+A new confirmed SuperTrend direction appears. The room becomes silent.
+
+SCENE 18 — REVERSAL WORKFLOW
+When the confirmed SuperTrend direction changes:
+1. Detect the confirmed new direction.
+2. Close any open old-direction position at market according to the configured reversal rule.
+3. Cancel all pending old-direction entry/limit/grid orders.
+4. Cancel obsolete old-direction exit/reduce/trailing instructions.
+5. Verify exchange state.
+6. Start a fresh setup for the new direction.
+7. Apply duplicate protection again.
+No old-trend order may survive accidentally.
+
+SCENE 19 — TWO ACCOUNT REVERSAL
+Account A reverses; Account B automatically takes the inverse direction. Each keeps its own quantity/settings/history.
+
+SCENE 20 — AFTERMATH
+Old orders disappear and new setup appears.
+SANJAY: “सिस्टम का काम अनुमान लगाना नहीं है। जो नियम है, वही करना है।”
+
+============================================================
+PART 6 — MARKET में नाम
+============================================================
+
+SCENE 21 — QUIET PROGRESS
+Montage over days/weeks: morning charts, notebooks, logs, meals, late-night monitoring. Do not show impossible wealth or guaranteed profits.
+
+SCENE 22 — FIRST RECOGNITION
+VIKRAM: “तेरे बारे में लोग पूछ रहे हैं।”
+SANJAY: “लोगों को system चाहिए या कहानी?”
+VIKRAM: “दोनों।”
+SANJAY: “तो कहानी छोड़। system देख।”
+
+SCENE 23 — SMALL MEETING
+Serious visitors inspect the room.
+SANJAY: “यह कोई मशीन नहीं जो हर बार सही निकले। नियम गलत समय में भी गलत परिणाम दे सकता है। फर्क इतना है कि यहाँ नियम पहले से तय हैं।”
+
+SCENE 24 — NAME SPREADS
+Phones and messages increase. A fictional/local media mention may appear, but never fabricate a claim about a real news organization. Sanjay's reputation grows naturally.
+
+============================================================
+PART 7 — तलाश
+============================================================
+
+SCENE 25 — QUESTIONS
+Arvind investigates the origin of the system and the first unknown call.
+ARVIND: “तुम्हें वो पहला फोन किसने किया था?”
+SANJAY: “नंबर unknown था। आवाज़ पहचान नहीं पाया।”
+
+SCENE 26 — OLD NOTEBOOK
+Sanjay finds the original notebook. A symbol and partial phone reference match the mystery call.
+
+SCENE 27 — LAWFUL SEARCH
+Sanjay and Raghav review old messages, dates and records. No hacking fantasy. They discover links to a larger financial-technology network.
+
+SCENE 28 — WARNING
+UNKNOWN MESSAGE: “अब तुम्हें पता है कि system किसका नहीं है। सवाल ये है कि तुम इसे किसके खिलाफ इस्तेमाल करोगे?”
+Sanjay does not answer.
+
+============================================================
+PART 8 — बड़े OFFICES
+============================================================
+
+SCENE 29 — CITY TRANSITION
+Sanjay travels from the village to a major city. Realistic bus/train/road transition, then a modern business district.
+
+SCENE 30 — CORPORATE MEETING
+Glass meeting room. Executives review the system.
+EXECUTIVE: “आपने इसे कहाँ से सीखा?”
+SANJAY: “जहाँ हर गलती की कीमत देनी पड़ती है।”
+
+SCENE 31 — OFFER
+EXECUTIVE: “आपको resources मिलेंगे।”
+SANJAY: “और बदले में?”
+EXECUTIVE: “Control.”
+SANJAY: “तो ये partnership नहीं है।”
+
+SCENE 32 — CONNECTION
+Sanjay sees the same symbol from the notebook inside the corporate environment and realizes the caller and larger organization are connected.
+
+============================================================
+PART 9 — अंतिम PHONE CALL
+============================================================
+
+SCENE 33 — NIGHT CALL
+Rain outside. Phone rings.
+UNKNOWN CALLER: “तुम्हें बहुत पहले रुक जाना चाहिए था।”
+SANJAY: “अब कौन बोल रहा है?”
+CALLER: “जिसे तुम ढूँढ रहे थे।”
+SANJAY: “नाम बताओ।”
+Pause.
+CALLER: “नाम से क्या होगा? तुमने system समझ लिया है। अब system के पीछे आदमी समझो।”
+The phone display can visibly show:
+8930814389
+
+SCENE 34 — CHOICE
+Sanjay considers shutting down, handing over, or exposing the truth.
+MEENA: “हर रास्ते की कीमत होती है। बस ये तय कर कि कीमत किस चीज़ की देनी है।”
+
+SCENE 35 — PREPARATION
+Sanjay lawfully backs up logs, records and evidence. He prepares to confront the organization.
+
+============================================================
+PART 10 — CLIMAX
+============================================================
+
+SCENE 36 — RETURN TO CONTROL ROOM
+The same room from Part 2, now mature and organized. Repeat an opening camera angle to show the passage of time.
+
+The actual Sanjay Rana trading dashboard is shown on the main monitor.
+Do NOT recreate it as a fake dashboard.
+Use the real dashboard interface supplied with this project.
+
+Mobile contact reference:
+8930814389
+
+SCENE 37 — FINAL SIGNAL
+A confirmed SuperTrend reversal occurs. The defined reversal workflow executes: old position handled, old pending orders cancelled, fresh setup prepared. Both accounts remain separate except for inverse direction. Tension is human and investigative, not magical.
+
+The real Delta Exchange trading dashboard remains visible.
+
+SCENE 38 — CONFRONTATION
+Executive connects/arrives. Arvind is involved through a lawful investigation.
+EXECUTIVE: “तुम्हें लगता है सब कुछ बंद करके जीत जाओगे?”
+SANJAY: “जीतने नहीं आया। सही चीज़ को सही नाम देने आया हूँ.”
+Evidence is presented to the proper authorities.
+
+SCENE 39 — FINAL REVEAL
+The unknown caller is revealed as a former insider who contacted Sanjay because the larger organization was operating without accountability. Keep reveal grounded and believable.
+CALLER: “तुम्हें system दिया नहीं गया था, Sanjay. तुम्हें मौका दिया गया था कि तुम उसे अपने तरीके से समझो।”
+SANJAY: “और अब?”
+CALLER: “अब फैसला तुम्हारा है।”
+
+SCENE 40 — ENDING
+Sanjay returns to the village. Morning visually echoes Part 1. He opens the notebook and writes:
+
+“Signal बदलता रहता है.
+नियम नहीं।”
+
+He closes the notebook.
+
+MEENA: “अब क्या?”
+SANJAY: “अब जो बनाया है, उसे सही तरीके से चलाना है।”
+
+FINAL SHOT
+Sanjay walks down the same village lane from the opening. Intercut briefly with the quiet control room monitor showing stable system status. Natural morning ambience. No fake profit claims. Slow pullback. Fade to black.
+
+TITLE CARD:
+SANJAY RANA RATHORE
+
+END.
+
+============================================================
+TARIK ASSEMBLY DIRECTIVE
+============================================================
+
+Treat this entire document as ONE film project. Do not generate ten unrelated films. Generate in exact chronological order from Part 1 through Part 10. If the platform needs shorter clips, automatically divide scenes into connected shots while preserving action, dialogue and continuity. Assemble shots into scenes, scenes into Parts and Parts into one final movie.
+
+CINEMATOGRAPHY:
+restrained feature-film language; wide establishing shots, medium dialogue shots, close-ups for emotional beats, natural tracking and over-the-shoulder shots. Avoid excessive cuts and flashy transitions.
+
+AUDIO:
+natural human dialogue, synchronized lip movement, realistic room tone, village ambience, city ambience, footsteps, phones, keyboards, rain and subtle sound effects. Music must support emotion and never overpower speech.
+
+EDITING:
+maintain eyelines, screen direction, time of day and spatial geography. Use natural J-cuts/L-cuts where appropriate. No random narration.
+
+FINAL CONTINUITY CHECK:
+
+1. Same Sanjay identity throughout.
+2. Same supporting-character identities.
+3. No unexplained wardrobe changes.
+4. No impossible location/time jumps.
+5. Dialogue always belongs to the correct speaker.
+6. SuperTrend rule stays consistent: ATR 10, multiplier 3.0, HL2, confirmed candle close.
+7. Two accounts remain independently configured; only direction is inverse.
+8. Reversal sequence is consistent.
+9. Filled orders keep original level identity and target logic.
+10. Refresh/reconnect never creates duplicate orders.
+11. Unconfirmed exchange/API state never appears falsely green.
+12. Mystery introduced in Part 1 is resolved in Part 10.
+13. Beginning and ending visually echo each other.
+14. Do not pad runtime with repeated footage. Expand through meaningful dialogue, reactions, establishing shots and connected action.
+15. Mobile number 8930814389 is used only where required.
+16. Real dashboard is used instead of a fabricated dashboard visual.
+17. No invented live trading result is presented as genuine financial performance.
+
+TARGET FINAL CUT:
+minimum 30 minutes; preferred extended cut 45–60 minutes when generation credits and platform limits permit.
+
+END OF MASTER FILE
+'''
+
+# ============================================================
+# SCENE PARSER
+# ============================================================
+
+def parse_scenes(text):
+    pattern = re.compile(
+        r"SCENE\s+(\d+)\s+—\s+([^\n]+)",
+        re.UNICODE
+    )
+
+    scenes = []
+
+    for match in pattern.finditer(text):
+        number = int(match.group(1))
+        title = match.group(2).strip()
+
+        start = match.start()
+        next_match = pattern.search(text, match.end())
+
+        if next_match:
+            block = text[start:next_match.start()].strip()
+        else:
+            block = text[start:].strip()
+
+        scenes.append({
+            "scene": number,
+            "title": title,
+            "text": block,
+            "dashboard": number in DASHBOARD_SCENES,
+            "phone_number": (
+                MOBILE_NUMBER
+                if number in PHONE_SCENES
+                else None
+            ),
+        })
+
+    return scenes
+
+
+SCENES = parse_scenes(MASTER_FILM)
+
+
+# ============================================================
+# CONTINUITY CHECK
+# ============================================================
+
+def continuity_check():
+    errors = []
+
+    scene_numbers = [x["scene"] for x in SCENES]
+
+    expected = list(range(1, 41))
+
+    if scene_numbers != expected:
+        errors.append(
+            f"Scene sequence incorrect: {scene_numbers}"
+        )
+
+    if "ATR Period 10" not in MASTER_FILM:
+        errors.append("ATR Period 10 missing.")
+
+    if "Multiplier 3.0" not in MASTER_FILM:
+        errors.append("Multiplier 3.0 missing.")
+
+    if "Source HL2" not in MASTER_FILM:
+        errors.append("HL2 source missing.")
+
+    if "confirmed candle close" not in MASTER_FILM.lower():
+        errors.append(
+            "Confirmed candle-close rule missing."
+        )
+
+    if MOBILE_NUMBER not in MASTER_FILM:
+        errors.append(
+            "Mobile number missing."
+        )
+
+    if "TARIK ASSEMBLY DIRECTIVE" not in MASTER_FILM:
+        errors.append(
+            "Assembly directive missing."
+        )
+
+    return {
+        "ok": len(errors) == 0,
+        "scene_count": len(SCENES),
+        "expected_scene_count": 40,
+        "errors": errors,
+    }
+
+
+# ============================================================
+# FILM MANIFEST
+# ============================================================
+
+def build_manifest():
+
+    check = continuity_check()
+
+    manifest = {
+        "film": FILM_TITLE,
+        "mobile": MOBILE_NUMBER,
+        "format": FORMAT,
+        "language": LANGUAGE,
+
+        "parts": 10,
+        "scenes": len(SCENES),
+
+        "scene_numbers": [
+            scene["scene"]
+            for scene in SCENES
+        ],
+
+        "dashboard_scenes": sorted(
+            DASHBOARD_SCENES
+        ),
+
+        "phone_scenes": sorted(
+            PHONE_SCENES
+        ),
+
+        "system": SYSTEM_RULES,
+
+        "delta_exchange": {
+            "base_url": DELTA_BASE_URL,
+            "product_symbol": DELTA_PRODUCT_SYMBOL,
+            "credentials_configured": bool(
+                DELTA_API_KEY and DELTA_API_SECRET
+            ),
+        },
+
+        "continuity_check": check,
+    }
+
+    return manifest
+
+
+# ============================================================
+# DELTA SIGNATURE HELPER
+# ============================================================
+
+def delta_signature(
+    method,
+    timestamp,
+    path,
+    query_string="",
+    body=""
+):
+    """
+    Delta Exchange HMAC helper.
+
+    IMPORTANT:
+    API credentials are NEVER printed.
+    """
+
+    if not DELTA_API_SECRET:
+        raise RuntimeError(
+            "DELTA_API_SECRET is not configured."
+        )
+
+    message = (
+        str(timestamp)
+        + method.upper()
+        + path
+        + query_string
+        + body
+    )
+
+    return hmac.new(
+        DELTA_API_SECRET.encode(),
+        message.encode(),
+        hashlib.sha256
+    ).hexdigest()
+
+
+# ============================================================
+# REAL DASHBOARD DETECTION
+# ============================================================
+
+def locate_dashboard():
+
+    candidates = [
+        REAL_DASHBOARD_FILE,
+
+        Path(
+            "DELTA-EXCHANGE-SANJAY-RANA-BTC-SUPER-TREND-PUBLIC-WITH-MOBILE.py"
+        ),
+
+        Path(
+            "dashboard.py"
+        ),
+
+        Path(
+            "app.py"
+        ),
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+
+    return None
+
+
+# ============================================================
+# OPTIONAL DASHBOARD CAPTURE
+# ============================================================
+
+def capture_real_dashboard():
+
+    dashboard = locate_dashboard()
+
+    if dashboard is None:
+        print(
+            "REAL DASHBOARD FILE NOT FOUND."
+        )
+        print(
+            "Film generation will continue without "
+            "dashboard capture."
+        )
+        return None
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print(
+            "Playwright is not installed."
+        )
+        print(
+            "Install with:"
+        )
+        print(
+            "pip install playwright"
+        )
+        print(
+            "playwright install chromium"
+        )
+        return None
+
+    print(
+        f"Dashboard found: {dashboard}"
+    )
+
+    # --------------------------------------------------------
+    # NOTE:
+    # We do not fabricate a dashboard.
+    # If the existing dashboard is already running locally,
+    # capture its actual UI.
+    # --------------------------------------------------------
+
+    dashboard_url = os.getenv(
+        "SANJAY_RANA_LOCAL_DASHBOARD_URL",
+        "http://localhost:8501"
+    )
+
+    try:
+        with sync_playwright() as p:
+
+            browser = p.chromium.launch(
+                headless=True
+            )
+
+            page = browser.new_page(
+                viewport={
+                    "width": 1440,
+                    "height": 1000,
+                }
+            )
+
+            page.goto(
+                dashboard_url,
+                wait_until="networkidle",
+                timeout=60000
+            )
+
+            page.screenshot(
+                path=str(
+                    REAL_DASHBOARD_SCREENSHOT
+                ),
+                full_page=True
+            )
+
+            browser.close()
+
+        print(
+            "REAL DASHBOARD CAPTURED:"
+        )
+        print(
+            REAL_DASHBOARD_SCREENSHOT
+        )
+
+        return str(
+            REAL_DASHBOARD_SCREENSHOT
+        )
+
+    except Exception as exc:
+
+        print(
+            "Dashboard capture could not be completed:"
+        )
+        print(exc)
+
+        return None
+
+
+# ============================================================
+# FILM PRODUCTION PACKAGE
+# ============================================================
+
+def export_production_package():
+
+    output_dir = Path(
+        "SANJAY_RANA_RATHORE_FILM"
+    )
+
+    output_dir.mkdir(
+        exist_ok=True
+    )
+
+    master_path = (
+        output_dir /
+        "SANJAY_RANA_RATHORE_MASTER_FILM.txt"
+    )
+
+    manifest_path = (
+        output_dir /
+        "film_manifest.json"
+    )
+
+    system_path = (
+        output_dir /
+        "system_config.json"
+    )
+
+    master_path.write_text(
+        MASTER_FILM.strip()
+        + "\n",
+        encoding="utf-8"
+    )
+
+    manifest = build_manifest()
+
+    manifest_path.write_text(
+        json.dumps(
+            manifest,
+            ensure_ascii=False,
+            indent=2
+        ),
+        encoding="utf-8"
+    )
+
+    system_path.write_text(
+        json.dumps(
+            SYSTEM_RULES,
+            ensure_ascii=False,
+            indent=2
+        ),
+        encoding="utf-8"
+    )
+
+    return {
+        "master": str(master_path),
+        "manifest": str(manifest_path),
+        "system": str(system_path),
+    }
+
+
+# ============================================================
+# PRINT SCENE LIST
+# ============================================================
+
+def print_scene_list():
+
+    print()
+    print("=" * 70)
+    print(FILM_TITLE)
+    print("=" * 70)
+
+    for scene in SCENES:
+
+        marker = ""
+
+        if scene["dashboard"]:
+            marker += " [REAL DASHBOARD]"
+
+        if scene["phone_number"]:
+            marker += (
+                f" [PHONE: {MOBILE_NUMBER}]"
+            )
+
+        print(
+            f"SCENE {scene['scene']:02d} — "
+            f"{scene['title']}{marker}"
+        )
+
+    print()
+    print(
+        f"TOTAL SCENES: {len(SCENES)}"
+    )
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    print()
+    print("=" * 70)
+    print("SANJAY RANA RATHORE — MASTER FILM ENGINE")
+    print("=" * 70)
+
+    result = continuity_check()
+
+    print()
+    print(
+        f"Scenes detected: "
+        f"{result['scene_count']}/40"
+    )
+
+    if result["ok"]:
+        print(
+            "CONTINUITY CHECK: PASS"
+        )
+    else:
+        print(
+            "CONTINUITY CHECK: FAILED"
+        )
+
+        for error in result["errors"]:
+            print(
+                "ERROR:",
+                error
+            )
+
+        raise SystemExit(1)
+
+    print_scene_list()
+
+    package = export_production_package()
+
+    print()
+    print(
+        "PRODUCTION PACKAGE CREATED:"
+    )
+
+    for name, path in package.items():
+        print(
+            f"{name}: {path}"
+        )
+
+    # --------------------------------------------------------
+    # Dashboard capture only when explicitly requested.
+    #
+    # This prevents accidental live trading/browser activity.
+    # --------------------------------------------------------
+
+    if "--dashboard" in os.sys.argv:
+
+        print()
+        print(
+            "Capturing REAL SANJAY RANA dashboard..."
+        )
+
+        capture_real_dashboard()
+
+    print()
+    print(
+        "FILM MASTER READY."
+    )
+
+    print(
+        "No live order is submitted by this film engine."
+    )
+
+    print(
+        "Delta API credentials are never printed."
+    )
+
+    print()
+
+
+if __name__ == "__main__":
+    main()
