@@ -174,19 +174,19 @@ DEFAULT_SELL_OFFSET = int(
 # 2 XRP = 2 contracts per grid order
 # 3 XRP = 3 contracts per grid order
 # ============================================================
-CONTRACT_XRP = 1.0
+CONTRACT_XRP = 2.0
 
 # ============================================================
 # OWNER ACCOUNT — SINGLE ACCOUNT SETTINGS
 # ============================================================
-OWNER_DEFAULT_QTY = 1.0  # XRPUSD: 1 contract = 1 XRP
+OWNER_DEFAULT_QTY = 2.0  # XRPUSD: 2 contract = 2 XRP
 if OWNER_DEFAULT_QTY <= 0:
-    OWNER_DEFAULT_QTY = 1.0
+    OWNER_DEFAULT_QTY = 2.0
 
 OWNER_GRID_QTY = st.number_input(
     "👑 OWNER ACCOUNT — GRID QUANTITY PER ORDER (XRP)",
-    min_value=1.0,
-    value=max(1.0, float(OWNER_DEFAULT_QTY)),
+    min_value=2.0,
+    value=max(2.0, float(OWNER_DEFAULT_QTY)),
     step=1.0,
     format="%.3f",
     key="owner_grid_order_qty_setting_v2",
