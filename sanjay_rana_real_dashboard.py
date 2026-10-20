@@ -179,7 +179,7 @@ CONTRACT_XRP = 1.0
 # ============================================================
 # OWNER ACCOUNT — SINGLE ACCOUNT SETTINGS
 # ============================================================
-OWNER_DEFAULT_QTY = 5.0  # XRPUSD: 5 contracts = 5 XRP by default
+OWNER_DEFAULT_QTY = 2.0  # XRPUSD: 2 contracts = 2 XRP by default
 if OWNER_DEFAULT_QTY <= 0:
     OWNER_DEFAULT_QTY = 1.0
 
